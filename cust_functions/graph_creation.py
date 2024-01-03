@@ -2,7 +2,7 @@
 import torch
 import networkx as nx
 
-def create_pathway_graph(pathways, translation, descendants=True, delete_empty=True):
+def create_pathway_graph(pathways, translation, descendants=True):
     
     G = nx.DiGraph()
     for _, row in pathways.iterrows():
@@ -17,17 +17,23 @@ def create_pathway_graph(pathways, translation, descendants=True, delete_empty=T
         protein = row['input']
         pathway = row['translation']
         if pathway in G:
-            G.nodes[pathway].setdefault('proteins', []).append(protein)
-            if descendants:
+            # create node for protein if it doesn't exist
+            if 'proteins' not in G.nodes[pathway]:
+                G.nodes[pathway]['proteins'] = []
+            # check if protein is in pathway
+            if protein not in G.nodes[pathway]['proteins']:
+                G.nodes[pathway]['proteins'].append(protein)
+            
+            # check if pathway has descendants
+            if len(descendant_map[pathway]) != 0:
                 for descendant in descendant_map[pathway]:
-                    G.nodes[descendant].setdefault('proteins', []).append(protein)
-        
-    if delete_empty:
-        for node in list(G.nodes()):
-            if 'proteins' not in G.nodes[node]:
-                # Remove the node and its descendants if they don't have their own proteins
-                nodes_to_remove = [node] + [n for n in descendant_map[node] if 'proteins' not in G.nodes[n]]
-                G.remove_nodes_from(nodes_to_remove)
+                    # create node for protein if it doesn't exist
+                    if 'proteins' not in G.nodes[descendant]:
+                        G.nodes[descendant]['proteins'] = []
+                    # check if protein is in pathway
+                    if protein not in G.nodes[descendant]['proteins']:
+                        G.nodes[descendant]['proteins'].append(protein)
+
     return G
 
 

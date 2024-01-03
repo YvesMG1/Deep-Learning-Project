@@ -103,13 +103,12 @@ def update_results(result_dic, fold, epoch, train_loss, train_cm, val_loss, val_
 
     return result_dic
 
-
 def plot_results(results, folds):
     fig, axes = plt.subplots(folds, 3, figsize=(15, 5 * folds))
 
-    for fold in results.keys():
+    for fold in range(folds):
             
-        metrics = results[fold]
+        metrics = results[fold + 1]
         epochs = range(1, len(metrics["train_loss"]) + 1)
 
         epochs_for_val_loss = range(1, len(metrics["val_loss"]) + 1)
@@ -139,6 +138,53 @@ def plot_results(results, folds):
         axes[fold][2].set_ylabel('ROC AUC')
         axes[fold][2].legend()
         axes[fold][2].set_title(f"ROC AUC for fold {fold + 1}")
+
+    plt.tight_layout()
+    plt.show()
+
+def print_val_results(results):
+    print(f"Average validation accuracy: {np.round(np.mean([results[fold]['val_accuracy'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 3)} +/- {np.round(np.std([results[fold]['val_accuracy'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 2)}")
+    print(f"Average validation ROC_AUC: {np.round(np.mean([results[fold]['val_roc_auc'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 3)} +/- {np.round(np.std([results[fold]['val_roc_auc'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 2)}")
+    print(f"Average validation F1 Phen1: {np.round(np.mean([results[fold]['val_f1_phen1'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 3)} +/- {np.round(np.std([results[fold]['val_f1_phen1'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 2)}")
+    print(f"Average validation F1 Phen2: {np.round(np.mean([results[fold]['val_f1_phen2'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 3)} +/- {np.round(np.std([results[fold]['val_f1_phen2'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 2)}")
+
+def plot_confusion_matrix(results):
+    # Plot confusion matrix for best validation epoch
+    cm = np.mean([results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()], axis=0)
+    cm_std = np.std([results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()], axis=0)
+    
+   # Plot confusion matrix
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    axes[0].matshow(cm, cmap=plt.cm.Blues, alpha=0.3)
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            axes[0].text(x=j, y=i, s= f"{round(cm[i, j],1)} +/- {round(cm_std[i, j],1)}" , va='center', ha='center', size = 15)
+    axes[0].set_title("Confusion Matrix")
+    axes[0].set_xlabel("Predicted")
+    axes[0].set_ylabel("Actual")
+
+
+    # Normalize each confusion matrix and collect them
+    normalized_cms = []
+    for fold in results.keys():
+        cm = results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1].astype(np.float64)
+        norm_cm = cm / cm.sum(axis=1, keepdims=True)
+        normalized_cms.append(norm_cm)
+
+    # Calculate mean and standard deviation of normalized confusion matrices
+    mean_normalized_cm = np.mean(normalized_cms, axis=0)
+    std_normalized_cm = np.std(normalized_cms, axis=0)
+
+
+    # Normalise confusion matrix
+    axes[1].matshow(mean_normalized_cm, cmap=plt.cm.Blues, alpha=0.3)
+    for i in range(mean_normalized_cm.shape[0]):
+        for j in range(mean_normalized_cm.shape[1]):
+            axes[1].text(x=j, y=i, s=f"{mean_normalized_cm[i, j]:.2f} +/- {std_normalized_cm[i, j]:.2f}", 
+                         va='center', ha='center', size=15)
+    axes[1].set_title("Normalised Confusion Matrix")
+    axes[1].set_xlabel("Predicted")
+    axes[1].set_ylabel("Actual")
 
     plt.tight_layout()
     plt.show()
