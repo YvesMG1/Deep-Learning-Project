@@ -66,15 +66,33 @@ def run_cv(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_dat
 
         if save:
             model.load_state_dict(best_model)
-            best_acc = np.round(results[fold + 1]['val_accuracy'][best_epoch - 1],2)
-            best_f1_macro = np.round(results[fold + 1]['val_f1_macro'][best_epoch - 1],2)
-            best_roc_auc = np.round(results[fold + 1]['val_roc_auc'][best_epoch - 1],2)
-            save_fold_path = f"{save_path}_fold_{fold + 1}_Acc_{best_acc}_F1_{best_f1_macro}_AUC_{best_roc_auc}.pt"
+            save_fold_path = f"{save_path}_fold_{fold + 1}.pt"
             torch.save(model.state_dict(), save_fold_path)
 
     return results
 
-def train(train_data, model, optimizer, loss_fn, device):
+def run_training(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_data, batch_size, num_epochs, device, save_path, use_scheduler = True):
+
+    train_loader = DataLoader(train_graph_data, batch_size=batch_size)
+    model = create_model_fn().to(device)
+    optimizer = optimizer_fn(model.parameters())
+    if use_scheduler:
+        scheduler = scheduler_fn(optimizer)
+
+    for epoch in range(num_epochs):
+        train_loss, _, _ = train(train_loader, model, optimizer, loss_fn, device)
+
+        if use_scheduler:
+            scheduler.step()
+
+    save_fold_path = f"{save_path}.pt"
+    torch.save(model.state_dict(), save_fold_path)
+
+    return model
+
+
+
+def train(train_data, model, optimizer, loss_fn, device, hierarchical = False):
     model.train()
     running_loss = 0
     all_preds = []
@@ -84,7 +102,11 @@ def train(train_data, model, optimizer, loss_fn, device):
         batch = batch.to(device, non_blocking=True)
 
         optimizer.zero_grad()
-        out = model(batch.x, batch.edge_index, batch.batch)
+        if hierarchical:
+            out = model(batch.x, batch.edge_index, batch.batch, batch.node_hierarchy)
+            print(out)
+        else:
+            out = model(batch.x, batch.edge_index, batch.batch)
         train_loss = loss_fn(out, batch.y)
         train_loss.backward()
         optimizer.step()
@@ -104,7 +126,7 @@ def train(train_data, model, optimizer, loss_fn, device):
 
     return running_loss / len(train_data), cm, roc_auc
 
-def validate(test_data, model, loss_fn, device):
+def validate(test_data, model, loss_fn, device, hierarchical = False):
     model.eval()
     running_loss = 0
     all_preds = []
@@ -113,7 +135,10 @@ def validate(test_data, model, loss_fn, device):
     with torch.no_grad():
         for batch in test_data:
             batch = batch.to(device)
-            out = model(batch.x, batch.edge_index, batch.batch)
+            if hierarchical:
+                out = model(batch.x, batch.edge_index, batch.batch, batch.node_hierarchy)
+            else:
+                out = model(batch.x, batch.edge_index, batch.batch)
             loss = loss_fn(out, batch.y)
             running_loss += loss.item()
 

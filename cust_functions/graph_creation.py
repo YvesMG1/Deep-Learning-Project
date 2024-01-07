@@ -1,6 +1,10 @@
 
 import torch
 import networkx as nx
+import numpy as np
+import pandas as pd
+import pickle
+from torch_geometric.data import Data
 
 def create_pathway_graph(pathways, translation, descendants=True):
     
@@ -47,3 +51,55 @@ def map_edges_to_indices(edge_list):
     # Map edges to indices
     edge_index = [[node_to_idx[edge[0]], node_to_idx[edge[1]]] for edge in edge_list]
     return torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+
+
+def create_patient_feature_dic(design_matrix, input_data_preprocessed, graph, gen_column = 'Protein'):
+
+    patient_ids = design_matrix['sample'].values
+    patient_features = {patient_id: [] for patient_id in patient_ids}
+    protein_names = input_data_preprocessed[gen_column].tolist()
+
+    for patient_id in patient_ids:
+        pathway_features = np.zeros((len(graph.nodes()), len(protein_names)))
+        for i, pathway in enumerate(graph.nodes()):
+            proteins_in_pathway = graph.nodes[pathway].get('proteins', [])
+            for j, protein in enumerate(protein_names):
+                if protein in proteins_in_pathway:
+                    pathway_features[i, j] = input_data_preprocessed.loc[input_data_preprocessed[gen_column] == protein, patient_id].values[0]
+
+        patient_features[patient_id] = pathway_features
+
+    return patient_features
+
+def pytorch_graphdata(design_matrix, data, graph, gen_column = 'Protein', load_data = True, save_data = False, path = 'pytorch_data/graph_data.pkl'):
+
+    graph_data = None
+    graph_data_list = None
+
+    if load_data:
+        with open(path, 'rb') as f:
+            graph_data_list = pickle.load(f)
+    else:
+        patient_features = create_patient_feature_dic(design_matrix, data, graph, gen_column = gen_column)
+        patient_ids = design_matrix['sample'].values
+
+        graph_data_list = []
+
+        for patient_id in patient_ids:
+            patient_graph = graph.copy()
+
+            # Get the PCA-reduced features for this patient
+            features = patient_features[patient_id]
+
+            # Convert NetworkX graph to PyTorch Geometric Data
+            edge_index = map_edges_to_indices(patient_graph.edges)
+            x = torch.tensor(features, dtype=torch.float)
+            y = torch.tensor([design_matrix[design_matrix['sample'] == patient_id]['group'].iloc[0]], dtype=torch.long)
+            graph_data = Data(x=x, edge_index=edge_index, y=y)
+            graph_data_list.append(graph_data)
+            
+        if save_data:
+            with open(path, 'wb') as f:
+                pickle.dump(graph_data_list, f)
+                
+    return graph_data_list
