@@ -1,16 +1,84 @@
 import torch
 import numpy as np
+import random
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, roc_auc_score
+from torch_geometric.loader import DataLoader
+from sklearn.model_selection import StratifiedKFold
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+def run_cv(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_data, train_labels, batch_size, num_epochs, device, save_path = None, 
+                 save = True, use_scheduler = True, early_stopping_patience = 30, SEED = 42, FOLDS = 3, hierarchical = False):
+    results = {}
+    skf = StratifiedKFold(n_splits=FOLDS, shuffle=True, random_state=SEED)
 
 
-def train(train_data, model, optimizer, loss_fn, device, update_confusion_matrix=False):
+    for fold, (train_idx, test_idx) in enumerate(skf.split(train_graph_data, train_labels)):
+        print(f"Fold: {fold + 1}")
+        train_loader = DataLoader([train_graph_data[i] for i in train_idx], batch_size=batch_size)
+        val_loader = DataLoader([train_graph_data[i] for i in test_idx], batch_size=batch_size)
 
+        model = create_model_fn().to(device)
+        optimizer = optimizer_fn(model.parameters())
+        if use_scheduler:
+            scheduler = scheduler_fn(optimizer)
+
+        best_val_loss = np.inf
+        best_model = None
+        patience = early_stopping_patience
+        best_epoch = 0
+
+        for epoch in range(num_epochs):
+            if hierarchical:
+                train_loss, train_cm, train_roc_auc = train(train_loader, model, optimizer, loss_fn, device, hierarchical = True)
+            else:
+                train_loss, train_cm, train_roc_auc = train(train_loader, model, optimizer, loss_fn, device)
+            if hierarchical:
+                val_loss, val_cm, val_roc_auc = validate(val_loader, model, loss_fn, device, hierarchical = True)
+            else:
+                val_loss, val_cm, val_roc_auc = validate(val_loader, model, loss_fn, device)
+            results = update_results(results, fold, epoch, train_loss, train_cm, train_roc_auc, val_loss, val_cm, val_roc_auc)
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_model = model.state_dict().copy()
+                patience = early_stopping_patience
+                best_epoch = epoch + 1
+                results[fold + 1]['best_val_epoch'] = best_epoch
+            else:
+                patience -= 1
+                if patience == 0:
+                    print(f"Early stopping at epoch {epoch + 1}")
+                    break
+
+            if use_scheduler:
+                scheduler.step()
+
+            
+            if epoch % 5 == 0:
+                print(f"Epoch: {epoch + 1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {results[fold + 1]['val_accuracy'][-1]:.4f}, Val F1 Macro: {results[fold + 1]['val_f1_macro'][-1]:.4f}")
+
+        if save:
+            model.load_state_dict(best_model)
+            best_acc = np.round(results[fold + 1]['val_accuracy'][best_epoch - 1],2)
+            best_f1_macro = np.round(results[fold + 1]['val_f1_macro'][best_epoch - 1],2)
+            best_roc_auc = np.round(results[fold + 1]['val_roc_auc'][best_epoch - 1],2)
+            save_fold_path = f"{save_path}_fold_{fold + 1}_Acc_{best_acc}_F1_{best_f1_macro}_AUC_{best_roc_auc}.pt"
+            torch.save(model.state_dict(), save_fold_path)
+
+    return results
+
+def train(train_data, model, optimizer, loss_fn, device):
     model.train()
     running_loss = 0
-    if update_confusion_matrix:
-        running_confusion_matrix = np.zeros((2, 2))
-
+    all_preds = []
+    all_labels = []
 
     for batch in train_data:
         batch = batch.to(device, non_blocking=True)
@@ -18,43 +86,51 @@ def train(train_data, model, optimizer, loss_fn, device, update_confusion_matrix
         optimizer.zero_grad()
         out = model(batch.x, batch.edge_index, batch.batch)
         train_loss = loss_fn(out, batch.y)
-        train_loss.backward(retain_graph=True)
+        train_loss.backward()
         optimizer.step()
         running_loss += train_loss.item()
 
-        if update_confusion_matrix:
-            pred = out.argmax(dim=1)
-            running_confusion_matrix += confusion_matrix(batch.y.cpu(), pred.cpu(), labels=[0, 1])
-        
-    if update_confusion_matrix:
-        return running_loss / len(train_data), running_confusion_matrix
-    else:
-        return running_loss / len(train_data)
+        preds = torch.softmax(out, dim=1)
+        all_preds.append(preds.detach().cpu().numpy())
+        all_labels.append(batch.detach().y.cpu().numpy())
 
+    all_preds = np.concatenate(all_preds)
+    all_labels = np.concatenate(all_labels)
 
-def validate(test_data, model, loss_fn, device, update_confusion_matrix=False):
+    roc_auc = roc_auc_score(all_labels, all_preds[:, 1])
 
+    pred_labels = np.argmax(all_preds, axis=1)
+    cm = confusion_matrix(all_labels, pred_labels, labels=[0, 1])
+
+    return running_loss / len(train_data), cm, roc_auc
+
+def validate(test_data, model, loss_fn, device):
     model.eval()
     running_loss = 0
-    if update_confusion_matrix:
-        running_confusion_matrix = np.zeros((2, 2))
+    all_preds = []
+    all_labels = []
 
     with torch.no_grad():
         for batch in test_data:
             batch = batch.to(device)
-
             out = model(batch.x, batch.edge_index, batch.batch)
             loss = loss_fn(out, batch.y)
             running_loss += loss.item()
 
-            if update_confusion_matrix:
-                pred = out.argmax(dim=1)
-                running_confusion_matrix += confusion_matrix(batch.y.cpu(), pred.cpu(), labels=[0, 1])
-    
-    if update_confusion_matrix:
-        return running_loss / len(test_data), running_confusion_matrix
-    else:
-        return running_loss / len(test_data)
+            preds = torch.softmax(out, dim=1)
+            all_preds.append(preds.cpu().numpy())
+            all_labels.append(batch.y.cpu().numpy())
+
+    all_preds = np.concatenate(all_preds)
+    all_labels = np.concatenate(all_labels)
+
+    roc_auc = roc_auc_score(all_labels, all_preds[:, 1])
+
+    pred_labels = np.argmax(all_preds, axis=1)
+    cm = confusion_matrix(all_labels, pred_labels, labels=[0, 1])
+
+    return running_loss / len(test_data), cm, roc_auc
+
 
 def calculate_metrics(cm):
     tn, fp, fn, tp = cm.ravel()
@@ -65,43 +141,39 @@ def calculate_metrics(cm):
     accuracy = (tp + tn) / (tp + tn + fp + fn)
     f1_phen1 = 2 * (precision_phen1 * recall_phen1) / (precision_phen1 + recall_phen1 + 1e-6)
     f1_phen2 = 2 * (precision_phen2 * recall_phen2) / (precision_phen2 + recall_phen2 + 1e-6)
-    roc_auc = (recall_phen1 + recall_phen2) / 2
-    return recall_phen1, recall_phen2, precision_phen1, precision_phen2, accuracy, f1_phen1, f1_phen2, roc_auc
+    f1_macro = (f1_phen1 + f1_phen2) / 2
+    return recall_phen1, recall_phen2, precision_phen1, precision_phen2, accuracy, f1_phen1, f1_phen2, f1_macro
 
-def update_results(result_dic, fold, epoch, train_loss, train_cm, val_loss, val_cm):
+def update_results(result_dic, fold, epoch, train_loss, train_cm, train_roc_auc, val_loss, val_cm, val_roc_auc):
     # Calculate metrics for train and val
     train_metrics = calculate_metrics(train_cm)
     val_metrics = calculate_metrics(val_cm)
 
-    # Mapping of metric names to their values
-    metrics = {
-        'train': (train_loss, train_metrics, train_cm),
-        'val': (val_loss, val_metrics, val_cm)
-    }
+    # Extend metric names to include ROC AUC and f1_macro
+    metric_names = ['recall_phen1', 'recall_phen2', 'precision_phen1', 'precision_phen2', 
+                    'accuracy', 'f1_phen1', 'f1_phen2', 'f1_macro']
 
-    # If first epoch, initialize result_dic
+    # Initialize or update result_dic
     if epoch == 0:
         result_dic[fold + 1] = {'epoch': [epoch + 1]}
         for metric_type in ['train', 'val']:
-            loss, calculated_metrics, cm = metrics[metric_type]
-            result_dic[fold + 1][f'{metric_type}_loss'] = [loss]
-            metric_names = ['recall_phen1', 'recall_phen2', 'precision_phen1', 'precision_phen2', 'accuracy', 'f1_phen1', 'f1_phen2', 'roc_auc']
+            result_dic[fold + 1][f'{metric_type}_loss'] = [train_loss if metric_type == 'train' else val_loss]
+            result_dic[fold + 1][f'{metric_type}_cm'] = [train_cm if metric_type == 'train' else val_cm]
             for i, name in enumerate(metric_names):
-                result_dic[fold + 1][f'{metric_type}_{name}'] = [calculated_metrics[i]]
-            result_dic[fold + 1][f'{metric_type}_cm'] = [cm]
-
-    # Append metrics for subsequent epochs
+                result_dic[fold + 1][f'{metric_type}_{name}'] = [train_metrics[i] if metric_type == 'train' else val_metrics[i]]
+            result_dic[fold + 1][f'{metric_type}_roc_auc'] = [train_roc_auc if metric_type == 'train' else val_roc_auc]
     else:
         result_dic[fold + 1]['epoch'].append(epoch + 1)
         for metric_type in ['train', 'val']:
-            loss, calculated_metrics, cm = metrics[metric_type]
-            result_dic[fold + 1][f'{metric_type}_loss'].append(loss)
-            metric_names = ['recall_phen1', 'recall_phen2', 'precision_phen1', 'precision_phen2', 'accuracy', 'f1_phen1', 'f1_phen2', 'roc_auc']
+            result_dic[fold + 1][f'{metric_type}_loss'].append(train_loss if metric_type == 'train' else val_loss)
+            result_dic[fold + 1][f'{metric_type}_cm'].append(train_cm if metric_type == 'train' else val_cm)
             for i, name in enumerate(metric_names):
-                result_dic[fold + 1][f'{metric_type}_{name}'].append(calculated_metrics[i])
-            result_dic[fold + 1][f'{metric_type}_cm'].append(cm)
+                result_dic[fold + 1][f'{metric_type}_{name}'].append(train_metrics[i] if metric_type == 'train' else val_metrics[i])
+            result_dic[fold + 1][f'{metric_type}_roc_auc'].append(train_roc_auc if metric_type == 'train' else val_roc_auc)
+            result_dic[fold + 1][f'{metric_type}_roc_auc'].append(train_roc_auc if metric_type == 'train' else val_roc_auc)
 
     return result_dic
+
 
 def plot_results(results, folds):
     fig, axes = plt.subplots(folds, 3, figsize=(15, 5 * folds))
@@ -131,57 +203,72 @@ def plot_results(results, folds):
         axes[fold][1].legend()
         axes[fold][1].set_title(f"Accuracy for fold {fold + 1}")
 
-        # Plot training and validation ROC AUC on third column
-        axes[fold][2].plot(epochs, metrics["train_roc_auc"], 'b-', label='Train ROC AUC')
-        axes[fold][2].plot(epochs_for_val_accuracy, metrics["val_roc_auc"], 'r-', label='Validation ROC AUC')
+        # Plot training and validation F1 Macro on third column
+        axes[fold][2].plot(epochs, metrics["train_f1_macro"], 'b-', label='Train F1 Macro')
+        axes[fold][2].plot(epochs_for_val_accuracy, metrics["val_f1_macro"], 'r-', label='Validation F1 Macro')
         axes[fold][2].set_xlabel('Epochs')
-        axes[fold][2].set_ylabel('ROC AUC')
+        axes[fold][2].set_ylabel('F1 Macro')
         axes[fold][2].legend()
-        axes[fold][2].set_title(f"ROC AUC for fold {fold + 1}")
+        axes[fold][2].set_title(f"F1 Macro for fold {fold + 1}")
 
     plt.tight_layout()
     plt.show()
 
-def print_val_results(results):
-    print(f"Average validation accuracy: {np.round(np.mean([results[fold]['val_accuracy'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 3)} +/- {np.round(np.std([results[fold]['val_accuracy'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 2)}")
-    print(f"Average validation ROC_AUC: {np.round(np.mean([results[fold]['val_roc_auc'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 3)} +/- {np.round(np.std([results[fold]['val_roc_auc'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 2)}")
-    print(f"Average validation F1 Phen1: {np.round(np.mean([results[fold]['val_f1_phen1'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 3)} +/- {np.round(np.std([results[fold]['val_f1_phen1'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 2)}")
-    print(f"Average validation F1 Phen2: {np.round(np.mean([results[fold]['val_f1_phen2'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 3)} +/- {np.round(np.std([results[fold]['val_f1_phen2'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()]), 2)}")
+def print_val_results(results, metrics = None):
+    if metrics is None:
+        metrics = ['accuracy', 'roc_auc', 'f1_macro', 'f1_phen1', 'f1_phen2', 'recall_phen1', 'recall_phen2', 'precision_phen1', 'precision_phen2']
+    for metric in metrics:
+        avg_metric = np.mean([results[fold]['val_' + metric][results[fold]['best_val_epoch'] - 1] for fold in results.keys()])
+        std_metric = np.std([results[fold]['val_' + metric][results[fold]['best_val_epoch'] - 1] for fold in results.keys()])
+        print(f"Average validation {metric}: {np.round(avg_metric, 3)} +/- {np.round(std_metric, 2)}")
 
-def plot_confusion_matrix(results):
+def plot_confusion_matrix(results, use = 'val'):
     # Plot confusion matrix for best validation epoch
-    cm = np.mean([results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()], axis=0)
-    cm_std = np.std([results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()], axis=0)
-    
+    if use == 'val':
+        cm = np.mean([results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()], axis=0)
+        cm_std = np.std([results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()], axis=0)
+    elif use == 'test':
+        cm = results
+
    # Plot confusion matrix
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
     axes[0].matshow(cm, cmap=plt.cm.Blues, alpha=0.3)
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
-            axes[0].text(x=j, y=i, s= f"{round(cm[i, j],1)} +/- {round(cm_std[i, j],1)}" , va='center', ha='center', size = 15)
+            if use == 'val':
+                axes[0].text(x=j, y=i, s=f"{cm[i, j]:.0f} +/- {cm_std[i, j]:.0f}", 
+                             va='center', ha='center', size=15)
+            elif use == 'test':
+                axes[0].text(x=j, y=i, s=f"{cm[i, j]:.0f}", va='center', ha='center', size=15)
     axes[0].set_title("Confusion Matrix")
     axes[0].set_xlabel("Predicted")
     axes[0].set_ylabel("Actual")
 
 
-    # Normalize each confusion matrix and collect them
-    normalized_cms = []
-    for fold in results.keys():
-        cm = results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1].astype(np.float64)
-        norm_cm = cm / cm.sum(axis=1, keepdims=True)
-        normalized_cms.append(norm_cm)
+    if use == 'val':
+        # Normalize each confusion matrix and collect them
+        normalized_cms = []
+        for fold in results.keys():
+            cm = results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1].astype(np.float64)
+            norm_cm = cm / cm.sum(axis=1, keepdims=True)
+            normalized_cms.append(norm_cm)
 
-    # Calculate mean and standard deviation of normalized confusion matrices
-    mean_normalized_cm = np.mean(normalized_cms, axis=0)
-    std_normalized_cm = np.std(normalized_cms, axis=0)
-
+        # Calculate mean and standard deviation of normalized confusion matrices
+        mean_normalized_cm = np.mean(normalized_cms, axis=0)
+        std_normalized_cm = np.std(normalized_cms, axis=0)
+    elif use == 'test':
+        mean_normalized_cm = cm / cm.sum(axis=1, keepdims=True)
 
     # Normalise confusion matrix
     axes[1].matshow(mean_normalized_cm, cmap=plt.cm.Blues, alpha=0.3)
     for i in range(mean_normalized_cm.shape[0]):
         for j in range(mean_normalized_cm.shape[1]):
-            axes[1].text(x=j, y=i, s=f"{mean_normalized_cm[i, j]:.2f} +/- {std_normalized_cm[i, j]:.2f}", 
-                         va='center', ha='center', size=15)
+            if use == 'val':
+                axes[1].text(x=j, y=i, s=f"{mean_normalized_cm[i, j]:.2f} +/- {std_normalized_cm[i, j]:.2f}", 
+                             va='center', ha='center', size=15)
+            elif use == 'test':
+                axes[1].text(x=j, y=i, s=f"{mean_normalized_cm[i, j]:.2f}", 
+                             va='center', ha='center', size=15)
     axes[1].set_title("Normalised Confusion Matrix")
     axes[1].set_xlabel("Predicted")
     axes[1].set_ylabel("Actual")
