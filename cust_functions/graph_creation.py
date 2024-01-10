@@ -82,7 +82,6 @@ def create_patient_feature_dic(design_matrix, input_data_preprocessed, graph, ge
     protein_names = input_data_preprocessed[gen_column].tolist()
 
     for patient_id in patient_ids:
-        pathway
         pathway_features = np.zeros((len(graph.nodes()), len(protein_names)))
         for i, pathway in enumerate(graph.nodes()):
             proteins_in_pathway = graph.nodes[pathway].get('proteins', [])
