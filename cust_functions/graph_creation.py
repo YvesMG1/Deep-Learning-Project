@@ -4,9 +4,10 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import pickle
+import random
 from torch_geometric.data import Data
 
-def create_pathway_graph(pathways, translation, descendants=True):
+def create_pathway_graph(pathways, translation, descendants=True, perturb = False, edge_removal_prob=0.5, edge_addition_prob=0.5):
     
     G = nx.DiGraph()
     for _, row in pathways.iterrows():
@@ -38,6 +39,9 @@ def create_pathway_graph(pathways, translation, descendants=True):
                     if protein not in G.nodes[descendant]['proteins']:
                         G.nodes[descendant]['proteins'].append(protein)
 
+    if perturb:
+        G = perturb_graph(G, edge_removal_prob=edge_removal_prob, edge_addition_prob=edge_addition_prob)
+
     return G
 
 
@@ -52,6 +56,24 @@ def map_edges_to_indices(edge_list):
     edge_index = [[node_to_idx[edge[0]], node_to_idx[edge[1]]] for edge in edge_list]
     return torch.tensor(edge_index, dtype=torch.long).t().contiguous()
 
+def perturb_graph(graph, edge_removal_prob=0.5, edge_addition_prob=0.5):
+    # Copy the original graph
+    perturbed_graph = graph.copy()
+
+    # Random Edge Removal
+    edges = list(perturbed_graph.edges())
+    num_edges_to_remove = int(edge_removal_prob * len(edges))
+    edges_to_remove = random.sample(edges, num_edges_to_remove)
+    perturbed_graph.remove_edges_from(edges_to_remove)
+
+    # Random Edge Addition
+    nodes = list(perturbed_graph.nodes())
+    possible_new_edges = [(i, j) for i in nodes for j in nodes if i != j and not perturbed_graph.has_edge(i, j)]
+    num_edges_to_add = int(edge_addition_prob * len(possible_new_edges))
+    edges_to_add = random.sample(possible_new_edges, num_edges_to_add)
+    perturbed_graph.add_edges_from(edges_to_add)
+
+    return perturbed_graph
 
 def create_patient_feature_dic(design_matrix, input_data_preprocessed, graph, gen_column = 'Protein'):
 
@@ -60,6 +82,7 @@ def create_patient_feature_dic(design_matrix, input_data_preprocessed, graph, ge
     protein_names = input_data_preprocessed[gen_column].tolist()
 
     for patient_id in patient_ids:
+        pathway
         pathway_features = np.zeros((len(graph.nodes()), len(protein_names)))
         for i, pathway in enumerate(graph.nodes()):
             proteins_in_pathway = graph.nodes[pathway].get('proteins', [])

@@ -58,7 +58,7 @@ def run_cv(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_dat
                     break
 
             if use_scheduler:
-                scheduler.step()
+                scheduler.step(val_loss)
 
             
             if epoch % 5 == 0:
@@ -155,6 +155,31 @@ def validate(test_data, model, loss_fn, device, hierarchical = False):
     cm = confusion_matrix(all_labels, pred_labels, labels=[0, 1])
 
     return running_loss / len(test_data), cm, roc_auc
+
+def test(test_data, models, device):
+    all_preds = []
+    all_prob_pos_class = []
+
+    with torch.no_grad():
+        for batch in test_data:
+            batch = batch.to(device)
+            batch_preds = []
+            for model in models:
+                out = model(batch.x, batch.edge_index, batch.batch)
+                preds = torch.softmax(out, dim=1)
+                batch_preds.append(preds.cpu().numpy())
+
+            batch_preds = np.array(batch_preds)
+            avg_prob_pos_class = np.mean(batch_preds[:, :, 1], axis=0)
+            all_prob_pos_class.append(avg_prob_pos_class)
+
+            # Majority voting
+            majority_vote = np.apply_along_axis(lambda x: np.bincount(x, minlength=2).argmax(), 0, np.argmax(batch_preds, axis=2))
+            all_preds.append(majority_vote)
+
+    all_preds = np.concatenate(all_preds)
+    all_prob_pos_class = np.concatenate(all_prob_pos_class)
+    return all_preds, all_prob_pos_class
 
 
 def calculate_metrics(cm):
