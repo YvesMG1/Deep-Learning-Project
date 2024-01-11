@@ -1,10 +1,11 @@
 import torch
 import numpy as np
+import pandas as pd
 import random
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, roc_auc_score
 from torch_geometric.loader import DataLoader
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, GridSearchCV
 
 def set_seed(seed):
     random.seed(seed)
@@ -91,7 +92,6 @@ def run_training(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_gra
     return model
 
 
-
 def train(train_data, model, optimizer, loss_fn, device, hierarchical = False):
     model.train()
     running_loss = 0
@@ -126,6 +126,7 @@ def train(train_data, model, optimizer, loss_fn, device, hierarchical = False):
 
     return running_loss / len(train_data), cm, roc_auc
 
+
 def validate(test_data, model, loss_fn, device, hierarchical = False):
     model.eval()
     running_loss = 0
@@ -155,6 +156,7 @@ def validate(test_data, model, loss_fn, device, hierarchical = False):
     cm = confusion_matrix(all_labels, pred_labels, labels=[0, 1])
 
     return running_loss / len(test_data), cm, roc_auc
+
 
 def test(test_data, models, device):
     all_preds = []
@@ -325,3 +327,60 @@ def plot_confusion_matrix(results, use = 'val'):
 
     plt.tight_layout()
     plt.show()
+
+def gridsearch(models, grid, X_train, y_train, scoring, refit = 'roc_auc'):
+
+    # Initialize dictionaries to store the results
+    best_scores = {metric: {} for metric in scoring}
+    best_params = {}
+
+    # Train models and store results
+    for model_name, name in zip(models, grid.keys()):
+        print(f"Training model {name}")
+        model = GridSearchCV(model_name, grid[name], cv=5, scoring=scoring, refit=refit, n_jobs=8)
+        model.fit(X_train, y_train)
+
+        # Store the best parameters
+        best_params[name] = model.best_params_
+
+        # Store the best scores for each metric
+        for metric in scoring:
+            key = f"mean_test_{metric}"
+            best_scores[metric][name] = model.cv_results_[key][model.best_index_]
+
+        # Print best parameters and best score for ROC AUC
+        print(f"Best parameters for {name}: {model.best_params_}")
+        print(f"Best ROC AUC score for {name}: {best_scores['roc_auc'][name]}")
+
+    # Creating a DataFrame for each metric
+    best_models = {metric: pd.DataFrame({"Model": list(best_scores[metric].keys()),
+                                        "Best Score": list(best_scores[metric].values()),
+                                        "Best Params": [best_params[model] for model in best_scores[metric]]}) 
+                for metric in scoring}
+    
+    return best_models, best_params
+
+def predict_ml_model(model, X_train, y_train, X_test, y_test):
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    y_pred_proba = model.predict_proba(X_test)[:, 1]
+    cm = confusion_matrix(y_test, y_pred)
+    return y_pred, y_pred_proba, cm
+
+def print_ml_metrics(cm, y_test, y_pred_proba):
+    recall_pheno1 = cm[1,1] / (cm[1,1] + cm[1,0] + 1e-10)
+    recall_pheno0 = cm[0,0] / (cm[0,0] + cm[0,1] + 1e-10)
+    precision_pheno1 = cm[1,1] / (cm[1,1] + cm[0,1] + 1e-10)
+    precision_pheno0 = cm[0,0] / (cm[0,0] + cm[1,0] + 1e-10)
+    f1_pheno1 = 2 * precision_pheno1 * recall_pheno1 / (precision_pheno1 + recall_pheno1)
+    f1_pheno0 = 2 * precision_pheno0 * recall_pheno0 / (precision_pheno0 + recall_pheno0)
+    accuracy = (cm[0,0] + cm[1,1]) / (cm[0,0] + cm[0,1] + cm[1,0] + cm[1,1])
+    
+    print("Recall pheno1: %f" % recall_pheno1)
+    print("Recall pheno0: %f" % recall_pheno0)
+    print("Precision pheno1: %f" % precision_pheno1)
+    print("Precision pheno0: %f" % precision_pheno0)
+    print("F1 pheno1: %f" % f1_pheno1)
+    print("F1 pheno0: %f" % f1_pheno0)
+    print("Accuracy: %f" % accuracy)
+    print("AUC: %f" % roc_auc_score(y_test, y_pred_proba))
