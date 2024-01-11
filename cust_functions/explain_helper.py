@@ -4,7 +4,6 @@ from torch_geometric.explain import GNNExplainer
 import matplotlib.pyplot as plt
 
 import pandas as pd 
-from .graph_creation import create_pathway_graph
 
 def explain_function(model_train: torch.nn.Module, data: list):
 
@@ -37,7 +36,7 @@ def explain_function(model_train: torch.nn.Module, data: list):
     return explanation_output
 
 
-def importance_calculator(explanation: Explanation, input_data_preprocessed, pathways, translation):
+def importance_calculator(explanation: Explanation, input_data_preprocessed, graph):
 
     '''
     The explanation model has an iomportance matrix (num_nodes, num_features)
@@ -64,8 +63,7 @@ def importance_calculator(explanation: Explanation, input_data_preprocessed, pat
     top_features = top_features.drop(columns=top_features.columns.difference(['Feature_score']))
 
     # Connect node indices to their pathway name
-    sample_graph = create_pathway_graph(pathways, translation, descendants=True)
-    index_node_match = {'Pathway': list(sample_graph.nodes())}
+    index_node_match = {'Pathway': list(graph.nodes())}
     index_node_match = pd.DataFrame(index_node_match)
     top_nodes = pd.merge(top_nodes, index_node_match, left_index=True, right_index=True, how='inner')
         
@@ -92,7 +90,7 @@ def explain_wrapper(model_explain_init: torch.nn.Module, path: str, explain_data
     explanation = explain_function(model_explain_init, explain_data)
 
     top_nodes, top_features = importance_calculator(explanation, 
-                                                    structural_data[0], structural_data[1], structural_data[2])
+                                                    structural_data[0], structural_data[1])
     
 
     return top_nodes, top_features
