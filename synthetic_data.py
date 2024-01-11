@@ -23,7 +23,7 @@ def create_synthetic_data():
     
     # Introduce correlated noise for a subset of genes
     correlated_genes_indices = np.random.choice(num_genes, 200, replace=False)
-    correlated_noise = np.random.normal(0, 2, (num_patients, 1))
+    correlated_noise = np.random.normal(0, 0.5, (num_patients, 1))
     gene_expression_noisy[:, correlated_genes_indices] += correlated_noise
     #gene_expression_noisy = np.where(gene_expression_noisy < 0, 0, gene_expression_noisy)
 
@@ -72,23 +72,23 @@ def create_synthetic_data():
 
     def nonlinear_transform(expression):
         # Combining multiple mathematical functions for complexity
-        return np.sin(expression * np.pi) * np.tanh(expression) + np.cos(expression * np.pi / 2) * np.exp(expression)
-
+        #return np.sin(expression * np.pi) * np.tanh(expression) + np.cos(expression * np.pi / 2) * np.exp(expression)
+        return np.log1p(np.abs(expression)) * np.exp(-expression**2) + np.sqrt(np.abs(expression + 0.5))
     # Function to simulate disease status with additional complexity
     def simulate_disease_status(gene_expression, pathways, key_pathways, key_genes):
         disease_status = []
         for patient in gene_expression:
             status = 0
-            """for pathway, genes in pathways.items():
+            for pathway, genes in pathways.items():
                 if 'Noise' not in pathway:
                     mean_expression = nonlinear_transform(np.mean(patient[genes]))
                     #print(mean_expression)
                     pathway_influence = 2 if pathway in key_pathways else 1
-                    status += pathway_influence if mean_expression > 1 else 0"""
-
+                    status += pathway_influence if mean_expression > 1 else 0
+            print(np.mean(patient[key_genes]))
             key_gene_expression = nonlinear_transform(np.mean(patient[key_genes]))
             print(key_gene_expression)
-            key_gene_influence = 111 if abs(key_gene_expression) > 1 else -1
+            key_gene_influence = 20 if abs(key_gene_expression) > 1.2 else -1
             # Adjust overall threshold for disease status
             disease_threshold = len(pathways) / 3  # Adjusted to a fixed value
             # Influence of key genes
