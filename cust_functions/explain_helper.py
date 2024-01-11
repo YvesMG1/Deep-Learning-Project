@@ -37,7 +37,7 @@ def explain_function(model_train: torch.nn.Module, data: list):
     return explanation_output
 
 
-def importance_calculator(explanation: Explanation, node: bool, k_node: int, feature: bool, k_feature: int, input_data_preprocessed, pathways, translation):
+def importance_calculator(explanation: Explanation, input_data_preprocessed, pathways, translation):
 
     '''
     The explanation model has an iomportance matrix (num_nodes, num_features)
@@ -52,17 +52,16 @@ def importance_calculator(explanation: Explanation, node: bool, k_node: int, fea
     node_mask = explanation.node_mask 
     pd_node_mask = pd.DataFrame(node_mask.numpy())
     
-    # Retrieve k_node most important nodes
-    if (node == True):
-        pd_node_mask['Node_score'] = pd_node_mask.sum(axis=1) # Per node sum horizontally across all features
-        top_nodes = pd_node_mask.nlargest(k_node, 'Node_score')
-        top_nodes = top_nodes.drop(columns=top_nodes.columns.difference(['Node_score']))
-        pd_node_mask = pd_node_mask.drop('Node_score', axis=1)
+    # Retrieve most important nodes
+    pd_node_mask['Node_score'] = pd_node_mask.sum(axis=1) # Per node sum horizontally across all features
+    top_nodes = pd_node_mask.sort_values(by = 'Node_score', ascending=False)
+    top_nodes = top_nodes.drop(columns=top_nodes.columns.difference(['Node_score']))
+    pd_node_mask = pd_node_mask.drop('Node_score', axis=1)
 
-    if (feature == True): 
-        pd_node_mask['Feature_score'] = pd_node_mask.sum(axis=0) # Per feature sum vertically across all nodes
-        top_features = pd_node_mask.nlargest(k_feature, 'Feature_score')
-        top_features = top_features.drop(columns=top_features.columns.difference(['Feature_score']))
+    # Retrieve most important features
+    pd_node_mask['Feature_score'] = pd_node_mask.sum(axis=0) # Per feature sum vertically across all nodes
+    top_features = pd_node_mask.sort_values(by = 'Feature_score', ascending=False)
+    top_features = top_features.drop(columns=top_features.columns.difference(['Feature_score']))
 
     # Connect node indices to their pathway name
     sample_graph = create_pathway_graph(pathways, translation, descendants=True)
@@ -79,7 +78,7 @@ def importance_calculator(explanation: Explanation, node: bool, k_node: int, fea
 
 
 
-def explain_wrapper(model_explain_init: torch.nn.Module, k_top: int, path: str, explain_data: list, structural_data: list, device):
+def explain_wrapper(model_explain_init: torch.nn.Module, path: str, explain_data: list, structural_data: list, device):
 
     '''
     Returns: Two pandas Dataframes, one for the most important features and one for the most important nodes
@@ -93,7 +92,6 @@ def explain_wrapper(model_explain_init: torch.nn.Module, k_top: int, path: str, 
     explanation = explain_function(model_explain_init, explain_data)
 
     top_nodes, top_features = importance_calculator(explanation, 
-                                                    True, k_top, True, k_top, 
                                                     structural_data[0], structural_data[1], structural_data[2])
     
 
