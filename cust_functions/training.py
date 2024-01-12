@@ -329,19 +329,18 @@ def plot_confusion_matrix(results, use = 'val'):
     plt.show()
 
 def gridsearch(models, grid, X_train, y_train, scoring, refit = 'roc_auc'):
-
-    # Initialize dictionaries to store the results
     best_scores = {metric: {} for metric in scoring}
     best_params = {}
+    fitted_models = {}  # Dictionary to store fitted models
 
-    # Train models and store results
     for model_name, name in zip(models, grid.keys()):
         print(f"Training model {name}")
         model = GridSearchCV(model_name, grid[name], cv=5, scoring=scoring, refit=refit, n_jobs=8)
         model.fit(X_train, y_train)
 
-        # Store the best parameters
+        # Store the best parameters and the fitted model
         best_params[name] = model.best_params_
+        fitted_models[name] = model.best_estimator_  # Storing the fitted model
 
         # Store the best scores for each metric
         for metric in scoring:
@@ -355,10 +354,10 @@ def gridsearch(models, grid, X_train, y_train, scoring, refit = 'roc_auc'):
     # Creating a DataFrame for each metric
     best_models = {metric: pd.DataFrame({"Model": list(best_scores[metric].keys()),
                                         "Best Score": list(best_scores[metric].values()),
-                                        "Best Params": [best_params[model] for model in best_scores[metric]]}) 
-                for metric in scoring}
+                                        "Best Params": [best_params[model] for model in best_scores[metric]]})
+                   for metric in scoring}
     
-    return best_models, best_params
+    return best_models, best_params, fitted_models
 
 def predict_ml_model(model, X_train, y_train, X_test, y_test):
     model.fit(X_train, y_train)
@@ -384,3 +383,63 @@ def print_ml_metrics(cm, y_test, y_pred_proba):
     print("F1 pheno0: %f" % f1_pheno0)
     print("Accuracy: %f" % accuracy)
     print("AUC: %f" % roc_auc_score(y_test, y_pred_proba))
+
+def extract_top_features(fitted_models, X_train, input_data_preprocessed, top_n=30):
+    feature_importances = {}
+    top_features = {}
+    top_features_with_names = {}
+
+    # Extracting feature importances
+    for model_name, model in fitted_models.items():
+        if hasattr(model, 'feature_importances_'):
+            # For tree-based models
+            feature_importances[model_name] = model.feature_importances_
+
+    # Sorting and selecting top features
+    for model_name, importances in feature_importances.items():
+        feature_names = X_train.columns
+        features_importance = zip(feature_names, importances)
+        sorted_features = sorted(features_importance, key=lambda x: x[1], reverse=True)
+        top_features[model_name] = sorted_features[:top_n]
+
+    # Adding protein names to top features
+    for model_name, features in top_features.items():
+        feature_names = [feature[0] for feature in features]
+        feature_scores = [round(feature[1], 3) for feature in features]
+        protein_names = [input_data_preprocessed['Protein'].tolist()[feature] for feature in feature_names]
+        combined_features = zip(feature_names, protein_names, feature_scores)
+        top_features_with_names[model_name] = list(combined_features)
+
+    return top_features_with_names
+
+def find_common_features(top_features_with_names, model1_name, model2_name):
+    # Extract top features for each model
+    model1_top_features = top_features_with_names[model1_name]
+    model2_top_features = top_features_with_names[model2_name]
+
+    # Create sets of top feature names for comparison
+    model1_top_feature_names = set([feature[0] for feature in model1_top_features])
+    model2_top_feature_names = set([feature[0] for feature in model2_top_features])
+
+    # Find common features
+    common_features = model1_top_feature_names.intersection(model2_top_feature_names)
+
+    # Dictionary to store common features with their positions, importance values, and protein names
+    common_features_info = {}
+
+    # Find positions, importance values, and protein names of common features in each model
+    for feature in common_features:
+        model1_feature_info = next((item for item in model1_top_features if item[0] == feature), None)
+        model2_feature_info = next((item for item in model2_top_features if item[0] == feature), None)
+
+        if model1_feature_info and model2_feature_info:
+            common_features_info[feature] = {
+                f'{model1_name}_Position': model1_top_features.index(model1_feature_info) + 1,
+                f'{model1_name}_Importance': model1_feature_info[2],
+                f'{model1_name}_Protein': model1_feature_info[1],
+                f'{model2_name}_Position': model2_top_features.index(model2_feature_info) + 1,
+                f'{model2_name}_Importance': model2_feature_info[2],
+                f'{model2_name}_Protein': model2_feature_info[1]
+            }
+
+    return common_features_info
