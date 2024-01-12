@@ -99,7 +99,7 @@ def explain_wrapper(model_explain_init: torch.nn.Module, path: str, explain_data
     return top_nodes, top_features
 
 
-def create_avg_sd_df (path: str, retrieve_feature: bool, sort: bool): 
+def create_avg_sd_df(path: str, retrieve_feature: bool, sort: bool): 
 
     if retrieve_feature == True: # Receive Feature
         position_dict_list = 1
