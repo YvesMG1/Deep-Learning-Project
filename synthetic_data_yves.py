@@ -20,7 +20,6 @@ def create_synthetic_data():
     gene_expression_noise = np.random.normal(0, 2, gene_expression.shape)
     gene_expression_noisy = gene_expression + gene_expression_noise
     
-    
     # Introduce correlated noise for a subset of genes
     correlated_genes_indices = np.random.choice(num_genes, 200, replace=False)
     correlated_noise = np.random.normal(0, 0.5, (num_patients, 1))

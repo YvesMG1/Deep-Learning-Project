@@ -367,22 +367,24 @@ def predict_ml_model(model, X_train, y_train, X_test, y_test):
     return y_pred, y_pred_proba, cm
 
 def print_ml_metrics(cm, y_test, y_pred_proba):
-    recall_pheno1 = cm[1,1] / (cm[1,1] + cm[1,0] + 1e-10)
-    recall_pheno0 = cm[0,0] / (cm[0,0] + cm[0,1] + 1e-10)
+    recall_pheno2 = cm[1,1] / (cm[1,1] + cm[1,0] + 1e-10)
+    recall_pheno1 = cm[0,0] / (cm[0,0] + cm[0,1] + 1e-10)
     precision_pheno1 = cm[1,1] / (cm[1,1] + cm[0,1] + 1e-10)
     precision_pheno0 = cm[0,0] / (cm[0,0] + cm[1,0] + 1e-10)
-    f1_pheno1 = 2 * precision_pheno1 * recall_pheno1 / (precision_pheno1 + recall_pheno1)
-    f1_pheno0 = 2 * precision_pheno0 * recall_pheno0 / (precision_pheno0 + recall_pheno0)
+    f1_pheno2 = 2 * precision_pheno1 * recall_pheno2 / (precision_pheno1 + recall_pheno2)
+    f1_pheno1 = 2 * precision_pheno0 * recall_pheno1 / (precision_pheno0 + recall_pheno1)
+    f1_macro = (f1_pheno2 + f1_pheno1) / 2
     accuracy = (cm[0,0] + cm[1,1]) / (cm[0,0] + cm[0,1] + cm[1,0] + cm[1,1])
     
-    print("Recall pheno1: %f" % recall_pheno1)
-    print("Recall pheno0: %f" % recall_pheno0)
-    print("Precision pheno1: %f" % precision_pheno1)
-    print("Precision pheno0: %f" % precision_pheno0)
-    print("F1 pheno1: %f" % f1_pheno1)
-    print("F1 pheno0: %f" % f1_pheno0)
     print("Accuracy: %f" % accuracy)
     print("AUC: %f" % roc_auc_score(y_test, y_pred_proba))
+    print("F1 Macro: %f" % f1_macro)
+    print("F1 pheno1: %f" % f1_pheno2)
+    print("F1 pheno0: %f" % f1_pheno1)
+    print("Recall pheno1: %f" % recall_pheno2)
+    print("Recall pheno0: %f" % recall_pheno1)
+    print("Precision pheno1: %f" % precision_pheno1)
+    print("Precision pheno0: %f" % precision_pheno0)
 
 def extract_top_features(fitted_models, X_train, input_data_preprocessed, top_n=30):
     feature_importances = {}
@@ -394,6 +396,9 @@ def extract_top_features(fitted_models, X_train, input_data_preprocessed, top_n=
         if hasattr(model, 'feature_importances_'):
             # For tree-based models
             feature_importances[model_name] = model.feature_importances_
+            # normalizing to 0-1 range
+            feature_importances[model_name] = feature_importances[model_name] / feature_importances[model_name].sum()
+
 
     # Sorting and selecting top features
     for model_name, importances in feature_importances.items():

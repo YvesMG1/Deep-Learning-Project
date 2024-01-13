@@ -3,7 +3,10 @@ from torch_geometric.explain import *
 from torch_geometric.explain import GNNExplainer
 import matplotlib.pyplot as plt
 
+import numpy as np
 import pandas as pd 
+import pickle 
+
 
 def explain_function(model_train: torch.nn.Module, data: list):
 
@@ -94,3 +97,48 @@ def explain_wrapper(model_explain_init: torch.nn.Module, path: str, explain_data
     
 
     return top_nodes, top_features
+
+
+def create_avg_sd_df(path: str, retrieve_feature: bool, sort: bool): 
+
+    if retrieve_feature == True: # Receive Feature
+        position_dict_list = 1
+        access = 'Feature_score'
+        avg_score = 'Avg_Feature_Score'
+        sd_score = 'Sd_Feature_score'
+    else: # Receive nodes
+        position_dict_list = 0
+        access = 'Node_score'
+        avg_score = 'Avg_Node_Score'
+        sd_score = 'Sd_Node_score'
+
+    with open(path, 'rb') as file:
+        # Load the dataset using pickle.load
+        Top_feature_nodes_per_fold = pickle.load(file)
+
+    features_or_nodes_list = []
+
+    for key, value in Top_feature_nodes_per_fold.items():
+        features_or_nodes_list.append(value[position_dict_list].sort_index()) # The 1 retrieves the feature scores instead of the node scores
+
+    avg_FeaturesOrNodes_across_folds = features_or_nodes_list[0] # The Dataframe we will store average and standard deviation across all folds in 
+    avg_FeaturesOrNodes_across_folds[access] = 0
+    avg_FeaturesOrNodes_across_folds = avg_FeaturesOrNodes_across_folds.rename(columns={access: avg_score})
+    avg_FeaturesOrNodes_across_folds = avg_FeaturesOrNodes_across_folds[avg_FeaturesOrNodes_across_folds.columns[::-1]]
+    avg_FeaturesOrNodes_across_folds[sd_score] = 0
+
+    for fold in features_or_nodes_list: # Each element is a pandas Df with protein/feature importance ordered by index 
+        if fold.isna().any().any():
+            print("DataFrame contains NaN values")
+        avg_FeaturesOrNodes_across_folds[avg_score] = avg_FeaturesOrNodes_across_folds[avg_score] + fold[access]
+        avg_FeaturesOrNodes_across_folds[sd_score] = avg_FeaturesOrNodes_across_folds[sd_score] + np.square(fold[access])
+
+    avg_FeaturesOrNodes_across_folds[avg_score] = avg_FeaturesOrNodes_across_folds[avg_score] / len(features_or_nodes_list)
+    avg_FeaturesOrNodes_across_folds[sd_score] = avg_FeaturesOrNodes_across_folds[sd_score] / len(features_or_nodes_list)
+
+    avg_FeaturesOrNodes_across_folds[sd_score] = np.sqrt(avg_FeaturesOrNodes_across_folds[sd_score] - np.square(avg_FeaturesOrNodes_across_folds[avg_score]))
+
+    if sort:
+        return avg_FeaturesOrNodes_across_folds.sort_values(by=avg_score, ascending=False)
+    else: 
+        return avg_FeaturesOrNodes_across_folds
