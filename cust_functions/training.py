@@ -8,6 +8,7 @@ from torch_geometric.loader import DataLoader
 from sklearn.model_selection import StratifiedKFold, GridSearchCV
 
 def set_seed(seed):
+    """ Sets the seed for reproducibility """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -16,15 +17,20 @@ def set_seed(seed):
 
 def run_cv(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_data, train_labels, batch_size, num_epochs, device, save_path = None, 
                  save = True, use_scheduler = True, early_stopping_patience = 30, SEED = 42, FOLDS = 3, hierarchical = False):
+    """ Runs cross validation on the Graph training data and returns the results """
     results = {}
-    skf = StratifiedKFold(n_splits=FOLDS, shuffle=True, random_state=SEED)
 
+    # Initialize stratified k-fold
+    skf = StratifiedKFold(n_splits=FOLDS, shuffle=True, random_state=SEED)
 
     for fold, (train_idx, test_idx) in enumerate(skf.split(train_graph_data, train_labels)):
         print(f"Fold: {fold + 1}")
+
+        # Create train and validation data loaders
         train_loader = DataLoader([train_graph_data[i] for i in train_idx], batch_size=batch_size)
         val_loader = DataLoader([train_graph_data[i] for i in test_idx], batch_size=batch_size)
 
+        # Initialize model, optimizer and scheduler
         model = create_model_fn().to(device)
         optimizer = optimizer_fn(model.parameters())
         if use_scheduler:
@@ -36,6 +42,8 @@ def run_cv(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_dat
         best_epoch = 0
 
         for epoch in range(num_epochs):
+
+            # Train and validate
             if hierarchical:
                 train_loss, train_cm, train_roc_auc = train(train_loader, model, optimizer, loss_fn, device, hierarchical = True)
             else:
@@ -45,7 +53,8 @@ def run_cv(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_dat
             else:
                 val_loss, val_cm, val_roc_auc = validate(val_loader, model, loss_fn, device)
             results = update_results(results, fold, epoch, train_loss, train_cm, train_roc_auc, val_loss, val_cm, val_roc_auc)
-
+            
+            # Early stopping
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_model = model.state_dict().copy()
@@ -57,11 +66,11 @@ def run_cv(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_dat
                 if patience == 0:
                     print(f"Early stopping at epoch {epoch + 1}")
                     break
-
+            
+            # Update scheduler
             if use_scheduler:
                 scheduler.step(val_loss)
 
-            
             if epoch % 5 == 0:
                 print(f"Epoch: {epoch + 1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {results[fold + 1]['val_accuracy'][-1]:.4f}, Val F1 Macro: {results[fold + 1]['val_f1_macro'][-1]:.4f}")
 
@@ -73,19 +82,24 @@ def run_cv(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_dat
     return results
 
 def run_training(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_graph_data, batch_size, num_epochs, device, save_path, use_scheduler = True):
+    """ Runs training on the Graph training data and returns the trained model """
 
+    # Create train data loader
     train_loader = DataLoader(train_graph_data, batch_size=batch_size)
+
+    # Initialize model, optimizer and scheduler
     model = create_model_fn().to(device)
     optimizer = optimizer_fn(model.parameters())
     if use_scheduler:
         scheduler = scheduler_fn(optimizer)
 
+    # Train
     for epoch in range(num_epochs):
         train_loss, _, _ = train(train_loader, model, optimizer, loss_fn, device)
 
         if use_scheduler:
             scheduler.step()
-
+    
     save_fold_path = f"{save_path}.pt"
     torch.save(model.state_dict(), save_fold_path)
 
@@ -93,6 +107,8 @@ def run_training(create_model_fn, loss_fn, optimizer_fn, scheduler_fn, train_gra
 
 
 def train(train_data, model, optimizer, loss_fn, device, hierarchical = False):
+    """ Trains the Graph model for one epoch and returns the loss, confusion matrix and ROC AUC score """
+
     model.train()
     running_loss = 0
     all_preds = []
@@ -112,15 +128,18 @@ def train(train_data, model, optimizer, loss_fn, device, hierarchical = False):
         optimizer.step()
         running_loss += train_loss.item()
 
+        # Use softmax to get probabilities
         preds = torch.softmax(out, dim=1)
         all_preds.append(preds.detach().cpu().numpy())
         all_labels.append(batch.detach().y.cpu().numpy())
 
     all_preds = np.concatenate(all_preds)
     all_labels = np.concatenate(all_labels)
-
+    
+    # Calculate ROC AUC score
     roc_auc = roc_auc_score(all_labels, all_preds[:, 1])
 
+    # Calculate confusion matrix
     pred_labels = np.argmax(all_preds, axis=1)
     cm = confusion_matrix(all_labels, pred_labels, labels=[0, 1])
 
@@ -128,6 +147,8 @@ def train(train_data, model, optimizer, loss_fn, device, hierarchical = False):
 
 
 def validate(test_data, model, loss_fn, device, hierarchical = False):
+    """ Validates the Graph model for one epoch and returns the loss, confusion matrix and ROC AUC score """
+    
     model.eval()
     running_loss = 0
     all_preds = []
@@ -143,6 +164,7 @@ def validate(test_data, model, loss_fn, device, hierarchical = False):
             loss = loss_fn(out, batch.y)
             running_loss += loss.item()
 
+            # Use softmax to get probabilities
             preds = torch.softmax(out, dim=1)
             all_preds.append(preds.cpu().numpy())
             all_labels.append(batch.y.cpu().numpy())
@@ -150,8 +172,10 @@ def validate(test_data, model, loss_fn, device, hierarchical = False):
     all_preds = np.concatenate(all_preds)
     all_labels = np.concatenate(all_labels)
 
+    # Calculate ROC AUC score
     roc_auc = roc_auc_score(all_labels, all_preds[:, 1])
 
+    # Calculate confusion matrix
     pred_labels = np.argmax(all_preds, axis=1)
     cm = confusion_matrix(all_labels, pred_labels, labels=[0, 1])
 
@@ -159,6 +183,8 @@ def validate(test_data, model, loss_fn, device, hierarchical = False):
 
 
 def test(test_data, models, device):
+    """ Tests the Graph model for one epoch and returns the predictions and probabilities """
+
     all_preds = []
     all_prob_pos_class = []
 
@@ -171,11 +197,12 @@ def test(test_data, models, device):
                 preds = torch.softmax(out, dim=1)
                 batch_preds.append(preds.cpu().numpy())
 
+            # Average predictions across models
             batch_preds = np.array(batch_preds)
             avg_prob_pos_class = np.mean(batch_preds[:, :, 1], axis=0)
             all_prob_pos_class.append(avg_prob_pos_class)
 
-            # Majority voting
+            # Use majority vote to get predictions
             majority_vote = np.apply_along_axis(lambda x: np.bincount(x, minlength=2).argmax(), 0, np.argmax(batch_preds, axis=2))
             all_preds.append(majority_vote)
 
@@ -185,7 +212,10 @@ def test(test_data, models, device):
 
 
 def calculate_metrics(cm):
-    tn, fp, fn, tp = cm.ravel()
+    """ Calculates metrics from a confusion matrix """
+
+    tn, fp, fn, tp = cm.ravel() # unravel confusion matrix
+
     recall_phen1 = tp / (tp + fn + 1e-6)
     recall_phen2 = tn / (tn + fp + 1e-6)
     precision_phen1 = tp / (tp + fp + 1e-6)
@@ -194,18 +224,22 @@ def calculate_metrics(cm):
     f1_phen1 = 2 * (precision_phen1 * recall_phen1) / (precision_phen1 + recall_phen1 + 1e-6)
     f1_phen2 = 2 * (precision_phen2 * recall_phen2) / (precision_phen2 + recall_phen2 + 1e-6)
     f1_macro = (f1_phen1 + f1_phen2) / 2
+
     return recall_phen1, recall_phen2, precision_phen1, precision_phen2, accuracy, f1_phen1, f1_phen2, f1_macro
 
 def update_results(result_dic, fold, epoch, train_loss, train_cm, train_roc_auc, val_loss, val_cm, val_roc_auc):
-    # Calculate metrics for train and val
+    """ Updates the results dictionary with the results from the current epoch """
+
+    # Calculate metrics from confusion matrix
     train_metrics = calculate_metrics(train_cm)
     val_metrics = calculate_metrics(val_cm)
 
-    # Extend metric names to include ROC AUC and f1_macro
+    # Metric names
     metric_names = ['recall_phen1', 'recall_phen2', 'precision_phen1', 'precision_phen2', 
                     'accuracy', 'f1_phen1', 'f1_phen2', 'f1_macro']
 
-    # Initialize or update result_dic
+    # If epoch is 0, initialize the dictionary
+    # If epoch is not 0, update the dictionary
     if epoch == 0:
         result_dic[fold + 1] = {'epoch': [epoch + 1]}
         for metric_type in ['train', 'val']:
@@ -228,6 +262,8 @@ def update_results(result_dic, fold, epoch, train_loss, train_cm, train_roc_auc,
 
 
 def plot_results(results, folds):
+    """ Plots training and validation loss, accuracy and F1 Macro for each fold """
+
     fig, axes = plt.subplots(folds, 3, figsize=(15, 5 * folds))
 
     for fold in range(folds):
@@ -267,6 +303,8 @@ def plot_results(results, folds):
     plt.show()
 
 def print_val_results(results, metrics = None):
+    """ Prints the average validation metrics and their standard deviation across folds """
+
     if metrics is None:
         metrics = ['accuracy', 'roc_auc', 'f1_macro', 'f1_phen1', 'f1_phen2', 'recall_phen1', 'recall_phen2', 'precision_phen1', 'precision_phen2']
     for metric in metrics:
@@ -275,7 +313,10 @@ def print_val_results(results, metrics = None):
         print(f"Average validation {metric}: {np.round(avg_metric, 3)} +/- {np.round(std_metric, 2)}")
 
 def plot_confusion_matrix(results, use = 'val'):
-    # Plot confusion matrix for best validation epoch
+    """ Plots the confusion matrix and the normalized confusion matrix """
+
+    # Calculate mean and standard deviation of confusion matrices across folds for validation
+    # For test, no averaging is required
     if use == 'val':
         cm = np.mean([results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()], axis=0)
         cm_std = np.std([results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1] for fold in results.keys()], axis=0)
@@ -287,31 +328,32 @@ def plot_confusion_matrix(results, use = 'val'):
     axes[0].matshow(cm, cmap=plt.cm.Blues, alpha=0.3)
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
+
+            # If validation, add standard deviation to confusion matrix
             if use == 'val':
                 axes[0].text(x=j, y=i, s=f"{cm[i, j]:.0f} +/- {cm_std[i, j]:.0f}", 
                              va='center', ha='center', size=15)
             elif use == 'test':
                 axes[0].text(x=j, y=i, s=f"{cm[i, j]:.0f}", va='center', ha='center', size=15)
+
     axes[0].set_title("Confusion Matrix")
     axes[0].set_xlabel("Predicted")
     axes[0].set_ylabel("Actual")
 
-
+    # Calculate mean and standard deviation of normalized confusion matrices across folds for validation
     if use == 'val':
-        # Normalize each confusion matrix and collect them
         normalized_cms = []
         for fold in results.keys():
             cm = results[fold]['val_cm'][results[fold]['best_val_epoch'] - 1].astype(np.float64)
             norm_cm = cm / cm.sum(axis=1, keepdims=True)
             normalized_cms.append(norm_cm)
-
-        # Calculate mean and standard deviation of normalized confusion matrices
+            
         mean_normalized_cm = np.mean(normalized_cms, axis=0)
         std_normalized_cm = np.std(normalized_cms, axis=0)
     elif use == 'test':
         mean_normalized_cm = cm / cm.sum(axis=1, keepdims=True)
 
-    # Normalise confusion matrix
+    # Plot normalized confusion matrix
     axes[1].matshow(mean_normalized_cm, cmap=plt.cm.Blues, alpha=0.3)
     for i in range(mean_normalized_cm.shape[0]):
         for j in range(mean_normalized_cm.shape[1]):

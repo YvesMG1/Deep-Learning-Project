@@ -5,12 +5,16 @@ from sklearn.model_selection import GridSearchCV
 
 
 def gridsearch(models, grid, X_train, y_train, scoring, refit = 'roc_auc'):
+    """ Performs grid search for a list of models and returns the best parameters and scores """
+
     best_scores = {metric: {} for metric in scoring}
     best_params = {}
     fitted_models = {}  # Dictionary to store fitted models
 
     for model_name, name in zip(models, grid.keys()):
         print(f"Training model {name}")
+
+        # Perform grid search
         model = GridSearchCV(model_name, grid[name], cv=5, scoring=scoring, refit=refit, n_jobs=8)
         model.fit(X_train, y_train)
 
@@ -41,13 +45,24 @@ def gridsearch(models, grid, X_train, y_train, scoring, refit = 'roc_auc'):
     return best_models, best_params, fitted_models
 
 def predict_ml_model(model, X_train, y_train, X_test, y_test):
+    """ Fits a model and returns the predictions and the confusion matrix """
+
+    # Fitting the model
     model.fit(X_train, y_train)
+
+    # Predicting the test set
     y_pred = model.predict(X_test)
     y_pred_proba = model.predict_proba(X_test)[:, 1]
+
+    # Creating the confusion matrix
     cm = confusion_matrix(y_test, y_pred)
+
     return y_pred, y_pred_proba, cm
 
 def print_ml_metrics(cm, y_test, y_pred_proba):
+    """ Prints the metrics for a given confusion matrix """
+
+    # Calculating metrics
     recall_pheno2 = cm[1,1] / (cm[1,1] + cm[1,0] + 1e-10)
     recall_pheno1 = cm[0,0] / (cm[0,0] + cm[0,1] + 1e-10)
     precision_pheno1 = cm[1,1] / (cm[1,1] + cm[0,1] + 1e-10)
@@ -57,6 +72,7 @@ def print_ml_metrics(cm, y_test, y_pred_proba):
     f1_macro = (f1_pheno2 + f1_pheno1) / 2
     accuracy = (cm[0,0] + cm[1,1]) / (cm[0,0] + cm[0,1] + cm[1,0] + cm[1,1])
     
+    # Printing metrics
     print("Accuracy: %f" % accuracy)
     print("AUC: %f" % roc_auc_score(y_test, y_pred_proba))
     print("F1 Macro: %f" % f1_macro)
@@ -68,6 +84,7 @@ def print_ml_metrics(cm, y_test, y_pred_proba):
     print("Precision pheno1: %f" % precision_pheno0)
 
 def extract_top_features(fitted_models, X_train, input_data_preprocessed, top_n=30):
+    """ Extracts the top features for RF and AdaBoost models """
 
     feature_importances = {}
     top_features = {}
@@ -80,7 +97,6 @@ def extract_top_features(fitted_models, X_train, input_data_preprocessed, top_n=
             feature_importances[model_name] = model.feature_importances_
             # normalizing to 0-1 range
             feature_importances[model_name] = feature_importances[model_name] / feature_importances[model_name].sum()
-
 
     # Sorting and selecting top features
     for model_name, importances in feature_importances.items():
@@ -101,6 +117,7 @@ def extract_top_features(fitted_models, X_train, input_data_preprocessed, top_n=
 
 
 def find_common_features(top_features_with_names, model1_name, model2_name):
+    """ Finds the common features between two models """
 
     # Extract top features for each model
     model1_top_features = top_features_with_names[model1_name]
