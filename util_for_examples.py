@@ -8,12 +8,10 @@ def fit_data_matrix_to_network_input(data_matrix: pd.DataFrame, features, featur
     dm = data_matrix.copy()
     nr_features_in_matrix = len(dm.index)
     if len(features) > nr_features_in_matrix:
-        print("hello")
         features_df = pd.DataFrame(features, columns=[feature_column])
         dm = dm.merge(
             features_df, how='right', on=feature_column)
     if len(features) > 0:
-        print("dasdf")
         dm.set_index(feature_column, inplace=True)
         dm = dm.loc[features]
     return dm
