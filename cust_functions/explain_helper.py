@@ -10,15 +10,16 @@ import pickle
 
 def explain_function(model_train: torch.nn.Module, data: list):
 
+    # Initialize Wrapper function for explanations in torch_geometric
     explainer = Explainer(
         model = model_train,
-        algorithm=GNNExplainer(epochs=200),
+        algorithm=GNNExplainer(epochs=200), # We use the GNN Explainer to explain our model
         explanation_type='model',
         node_mask_type='attributes',
         edge_mask_type='object',
         model_config=dict(
             mode='binary_classification',
-            task_level='graph',
+            task_level='graph', # We make one label prediction per graph, not per node
             return_type='raw',
         ),    
     #threshold_config=dict(threshold_type='topk', value=10), 
@@ -27,6 +28,7 @@ def explain_function(model_train: torch.nn.Module, data: list):
     avg_feature_mask = torch.zeros((data[0].x.shape))
     avg_edge_mask = torch.zeros(data[0].edge_index.shape[1])
     
+    # Average over the importance matrices across patients
     for index, data_point in enumerate(data):
         explanation = explainer(x = data_point.x, edge_index = data_point.edge_index)
         avg_feature_mask = (avg_feature_mask * index + explanation.node_mask) / (index+1)
@@ -87,11 +89,14 @@ def explain_wrapper(model_explain_init: torch.nn.Module, path: str, explain_data
 
     relative_path = "./trained_models/" + path
 
+    # Initialize model architecture with the respective weights 
     model_explain_init.load_state_dict(torch.load(relative_path, map_location=torch.device(device)))
     model_explain_init.eval()
 
+    # Explain model over the respective set of patient data
     explanation = explain_function(model_explain_init, explain_data)
 
+    # Compute the most important nodes and features
     top_nodes, top_features = importance_calculator(explanation, 
                                                     structural_data[0], structural_data[1])
     
@@ -101,41 +106,50 @@ def explain_wrapper(model_explain_init: torch.nn.Module, path: str, explain_data
 
 def create_avg_sd_df(path: str, retrieve_feature: bool, sort: bool): 
 
-    if retrieve_feature == True: # Receive Feature
+    ##
+    # This function helps to average the importance scores across the different folds from CV
+    ##
+
+    if retrieve_feature == True: # Handle feature importance scores
         position_dict_list = 1
         access = 'Feature_score'
         avg_score = 'Avg_Feature_Score'
         sd_score = 'Sd_Feature_score'
-    else: # Receive nodes
+    else: # Handle nodes importance scores
         position_dict_list = 0
         access = 'Node_score'
         avg_score = 'Avg_Node_Score'
         sd_score = 'Sd_Node_score'
 
+    # Load the dataset with the 'per-fold-explanations'
     with open(path, 'rb') as file:
-        # Load the dataset using pickle.load
         Top_feature_nodes_per_fold = pickle.load(file)
 
     features_or_nodes_list = []
 
+    # Fill the list
+    # The dictionary our path leads to stores two dataframes (one for proteins, one for pathways) for each key (i.e. for each trained model)
     for key, value in Top_feature_nodes_per_fold.items():
-        features_or_nodes_list.append(value[position_dict_list].sort_index()) # The 1 retrieves the feature scores instead of the node scores
+        features_or_nodes_list.append(value[position_dict_list].sort_index()) 
 
-    avg_FeaturesOrNodes_across_folds = features_or_nodes_list[0] # The Dataframe we will store average and standard deviation across all folds in 
+    # Create Dataframe to store average and standard deviation across all folds 
+    avg_FeaturesOrNodes_across_folds = features_or_nodes_list[0]
     avg_FeaturesOrNodes_across_folds[access] = 0
     avg_FeaturesOrNodes_across_folds = avg_FeaturesOrNodes_across_folds.rename(columns={access: avg_score})
     avg_FeaturesOrNodes_across_folds = avg_FeaturesOrNodes_across_folds[avg_FeaturesOrNodes_across_folds.columns[::-1]]
     avg_FeaturesOrNodes_across_folds[sd_score] = 0
 
+    # Iterate through the different CV folds
     for fold in features_or_nodes_list: # Each element is a pandas Df with protein/feature importance ordered by index 
         if fold.isna().any().any():
             print("DataFrame contains NaN values")
+        # Compute first and second moment 
         avg_FeaturesOrNodes_across_folds[avg_score] = avg_FeaturesOrNodes_across_folds[avg_score] + fold[access]
         avg_FeaturesOrNodes_across_folds[sd_score] = avg_FeaturesOrNodes_across_folds[sd_score] + np.square(fold[access])
 
+    # Use first and second moment to compute average and standard deviation
     avg_FeaturesOrNodes_across_folds[avg_score] = avg_FeaturesOrNodes_across_folds[avg_score] / len(features_or_nodes_list)
     avg_FeaturesOrNodes_across_folds[sd_score] = avg_FeaturesOrNodes_across_folds[sd_score] / len(features_or_nodes_list)
-
     avg_FeaturesOrNodes_across_folds[sd_score] = np.sqrt(avg_FeaturesOrNodes_across_folds[sd_score] - np.square(avg_FeaturesOrNodes_across_folds[avg_score]))
 
     if sort:
