@@ -27,8 +27,12 @@ The file './Explain.ipynb' then computes the key features and nodes. <br>
 The file './Explain_statistics.ipynb' brings together the GNN, BINN and ML interpreations and provides summary statistics. 
 
 ### 2.3. BINN
-
-
+Parts of the code for the BINN implementation were taken and adapted from the BINN documentation: <br>
+https://infectionmedicineproteomics.github.io/BINN/ <br>
+The file "./BINN_final.ipynb" contains the code for training and testing the BINN. <br>
+The file "./BINN_Explain.ipynb" contains the code for explaining the BINN model. <br>
+The file "./BINN_randomization.ipynb" contains the code for perturbing the BINN. <br>
+The file "./util_for_examples.py" is taken from the BINN documentation and is used for preparing the data for the BINN
 
 ### 2.4 ML-models
 
