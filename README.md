@@ -40,4 +40,4 @@ The file './ML_models' trains RandomForest, AdaBoost and Logistical Regression. 
 
 ## 3. Dependencies 
 
-The code only runs (without modification) if the following dependencies are installed: 
+All dependencies are listed in 'environment.yml'.
